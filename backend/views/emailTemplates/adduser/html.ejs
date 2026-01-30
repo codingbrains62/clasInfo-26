@@ -1,0 +1,30 @@
+if(request_page==="add_user"){%>
+<p>Dear <%=Name%>,</p>
+<table class="table">
+	<thead>
+		<tr>
+			<th>Column</th>
+			<th>Old</th>
+			<th>New</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<th>Column</th>
+			<th>Old</th>
+			<th>New</th>
+		</tr>
+		<!-- <% for(var i = 0; i < dataobj.length; i++) { %>
+			   <tr>
+
+		        <td><%= dataobj[i].column %></td>
+		        <td><%= dataobj[i].current_record %></td>
+		        <td><%= dataobj[i].new_record %></td>
+		    </tr>
+	      <% } %> -->
+	</tbody>	
+		 
+</table>
+<br><br>
+<p>Thank you request for Changes</p>
+<% } %>

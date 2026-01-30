@@ -1,0 +1,102 @@
+/* Top-Bar */
+body {
+	padding: 0;
+	margin: 0 !important;
+}
+.mainnav {
+	background: #2196f3;
+	ul {
+		li {
+			background: #003e77;
+			border-right: 1px solid #2196f3;
+			a {
+				color: #fff;
+			}
+			&:hover {
+				a {
+					color: #2196f3;
+				}
+			}
+		}
+	}
+}
+.floatleft {
+	float: left;
+}
+.floatright {
+	float: right;
+}
+.clear {
+	clear: both;
+}
+
+/* Login-Form */
+.login_form {
+	display: flex;
+	max-width: 350px;
+	width: 100%;
+	margin: auto;
+	height: calc(100vh - 40px);
+	align-items: center;
+	.innerwrp {
+		width: 100%;
+		padding: 40px 30px;
+		border-radius: 8px;
+		border: 1px solid #a8a8a8;
+		background: #fff;
+		.heading {
+			font-size: 22px;
+			text-align: center;
+			color: #a8a8a8;
+			font-weight: normal;
+			text-transform: uppercase;
+			margin-bottom: 40px;
+		}
+		.form-group {
+			margin-bottom: 20px;
+			input {
+				height: 50px;
+				border-color: #a8a8a8;
+			}
+		}
+		.loginbtn {
+			width: 100%;
+			background: #2196f3 !important;
+			border-color: #2196f3 !important;
+			margin-bottom: 30px;
+			height: 50px;
+		}
+		.forgetbtn {
+			display: block;
+			text-align: center;
+			text-decoration: none;
+			color: #003e77;
+			font-weight: 400;
+		}
+		input[type="checkbox"] {
+			width: 18px;
+			height: 18px;
+			margin-right: 8px;
+		}
+		.custom-control.custom-control-inline.custom-checkbox {
+			display: flex;
+			align-items: center;
+		}
+	}
+}
+&::placeholder {
+	color: #a8a8a8 !important;
+}
+
+.error {
+    color: #fff;
+    text-align: center;
+    background: #ff00007a;
+    margin-bottom: 25px;
+    text-transform: capitalize;
+    font-weight: 400;
+}
+
+.box{
+    height: 306px;
+}

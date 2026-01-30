@@ -1,0 +1,432 @@
+Login & Authentication Roadmap (Current + Future)
+   1️ Standard Login (username/email + password)
+
+     Routes & Endpoints
+        POST /api/v1/login → validate-login action
+        POST /api/v1/add_user → add-client-user
+        POST /api/v1/edit_user → update-client-user
+
+     Backend Logic
+        Find user by username OR emailAddress (isDeleted=0, isDisabled=0)
+        Compare password using bcrypt.compare
+        Generate JWT (jsonwebtoken) and set cookie
+        Update lastSeenAt and token in DB
+        Log historical events for success / failure
+
+     Database / Model Setup
+        DB Table Defaults: isDeleted, isDisabled, isOnHold → 0
+        Sails Model Defaults: defaultsTo: false for the same fields
+        Password hashing via beforeCreate and beforeUpdate hooks
+
+     Checklist
+        Route mapping correct (/api/v1/login)
+        Validate login payload (username/email + password)
+        Password hashing in model
+        JWT generation and cookie set
+        Historical events logging
+        DB defaults + model defaults configured
+
+   2️ Future / Passkey Login (Passwordless / WebAuthn / FIDO2)
+       Goal: Allow users to login using device biometrics or security keys, no password required.
+            
+            Frontend
+                Use @simplewebauthn/browser
+                Provide Register (enroll passkey) and Login buttons
+                Communicate with backend for challenge/response
+
+            Backend
+                Use @simplewebauthn/server
+               Endpoints
+                POST /api/v1/passkey/register → generate registration challenge
+                POST /api/v1/passkey/register/verify → verify registration response
+                POST /api/v1/passkey/login → generate login challenge
+                POST /api/v1/passkey/login/verify → verify login response + issue JWT
+
+            Database
+                Add passkeys table / field in Client model
+                Store credential IDs, public keys, counter, etc.
+
+            Checklist
+                Frontend: implement passkey registration + authentication
+                Backend: implement WebAuthn server endpoints
+                JWT issued on successful passkey login
+                Associate passkey credentials with users in DB
+				
+		
+		
+________________________________________________________________________________________________________
+
+
+  /** --------- Start Model Update – Client.js------------**/
+  
+  /**
+ * Client.js
+ * Add passkey support
+ **/
+const bcrypt = require('bcrypt');
+const _ = require('@sailshq/lodash');
+
+module.exports = {
+  tableName: 'client',
+
+  attributes: {
+    fullName: { type: 'string', required: true, columnType: 'varchar(120)' },
+    emailAddress: { type: 'string', required: true, isEmail: true, columnType: 'varchar(200)', unique: true },
+    username: { type: 'string', required: true, columnType: 'varchar(200)', unique: true },
+    password: { type: 'string', protect: true, columnType: 'varchar(255)' },
+
+    // Existing fields...
+    isDisabled: { type: 'boolean', defaultsTo: false, columnType: 'bit' },
+    isDeleted: { type: 'boolean', defaultsTo: false, columnType: 'bit' },
+    isOnHold: { type: 'boolean', defaultsTo: false, columnType: 'bit' },
+
+    // New Passkey fields
+    passkeys: { type: 'json', description: 'Stores registered passkey credentials' },
+  },
+
+  customToJSON: function() {
+    return _.omit(this, ['password']);
+  },
+
+  beforeCreate: async function(client, proceed) {
+    if (client.password) {
+      const salt = await bcrypt.genSalt(10);
+      client.password = await bcrypt.hash(client.password, salt);
+    }
+    return proceed();
+  },
+
+  beforeUpdate: async function(client, proceed) {
+    if (client.password) {
+      const salt = await bcrypt.genSalt(10);
+      client.password = await bcrypt.hash(client.password, salt);
+    }
+    return proceed();
+  }
+};
+
+
+
+ /** ---------Explanation:------------
+passkeys JSON column will store multiple passkey credentials: id, publicKey, counter, deviceName etc.
+Password login still works; passkey login is optional.
+                     ------------=====End Explanation:------------**/
+					 
+  /** --------- End Model Update – Client.js------------**/
+  			 
+				
+ /** -------- Start Routes – config/routes.js	 ------------**/
+  
+ module.exports.routes = {
+
+  // Standard login
+  'POST /api/v1/login': { action: 'client/validate-login' },
+
+  // Passkey login
+  'POST /api/v1/passkey/register': { action: 'client/passkey-register' },
+  'POST /api/v1/passkey/register/verify': { action: 'client/passkey-register-verify' },
+  'POST /api/v1/passkey/login': { action: 'client/passkey-login' },
+  'POST /api/v1/passkey/login/verify': { action: 'client/passkey-login-verify' },
+
+};
+
+
+
+ /** --------End Routes – config/routes.js	 ------------**/
+ 
+ /** -------- Start Controller Skeleton – api/controllers/client/ ------------**/
+ /** -------- start passkey-register.js------------**/
+ 
+ const { generateRegistrationOptions } = require('@simplewebauthn/server');
+
+module.exports = {
+  friendlyName: 'Passkey register',
+
+  inputs: {
+    email: { type: 'string', required: true },
+    deviceName: { type: 'string', required: false },
+  },
+
+  fn: async function (inputs, exits) {
+    const user = await Client.findOne({ emailAddress: inputs.email });
+    if (!user) return exits.badRequest({ message: 'User not found' });
+
+    const options = generateRegistrationOptions({
+      rpName: 'MyApp',
+      rpID: 'localhost',
+      userID: String(user.id),
+      userName: user.username,
+      timeout: 60000,
+      attestationType: 'direct',
+      excludeCredentials: (user.passkeys || []).map(pk => ({
+        id: Buffer.from(pk.credID, 'base64'),
+        type: 'public-key',
+      }))
+    });
+
+    // Save challenge temporarily (e.g., in memory or cache)
+    this.req.session.challenge = options.challenge;
+
+    return exits.success(options);
+  }
+};
+
+ /** -------- end passkey-register.js------------**/
+ /** -------- start passkey-register-verify.js------------**/
+ const { verifyRegistrationResponse } = require('@simplewebauthn/server');
+
+module.exports = {
+  friendlyName: 'Passkey register verify',
+
+  inputs: {
+    email: { type: 'string', required: true },
+    response: { type: 'json', required: true },
+    deviceName: { type: 'string', required: false }
+  },
+
+  fn: async function (inputs, exits) {
+    const user = await Client.findOne({ emailAddress: inputs.email });
+    if (!user) return exits.badRequest({ message: 'User not found' });
+
+    const verification = await verifyRegistrationResponse({
+      response: inputs.response,
+      expectedChallenge: this.req.session.challenge,
+      expectedOrigin: 'http://localhost:1337',
+      expectedRPID: 'localhost',
+    });
+
+    if (!verification.verified) return exits.badRequest({ message: 'Verification failed' });
+
+    // Save passkey
+    const { credentialPublicKey, credentialID, counter } = verification.registrationInfo;
+    const passkeys = user.passkeys || [];
+    passkeys.push({ credID: credentialID.toString('base64'), publicKey: credentialPublicKey.toString('base64'), counter, deviceName: inputs.deviceName || 'Unknown' });
+
+    await Client.updateOne({ id: user.id }).set({ passkeys });
+
+    return exits.success({ message: 'Passkey registered successfully' });
+  }
+};
+
+ /** -------- end passkey-register-verify.js------------**/
+ 
+ /** -------- End Controller Skeleton – api/controllers/client/ ------------**/
+ 
+ 
+ step
+ Install dependency
+ --  npm install @simplewebauthn/server
+ /** --------Start Controller – passkey-login.js------------**/
+ /** Generates the login challenge for a user.**/
+ 
+ const { generateAuthenticationOptions } = require('@simplewebauthn/server');
+module.exports = {
+  friendlyName: 'Passkey login challenge',
+
+  inputs: {
+    email: { type: 'string', required: true },
+  },
+
+  fn: async function (inputs, exits) {
+    const user = await Client.findOne({ emailAddress: inputs.email });
+    if (!user) return exits.badRequest({ message: 'User not found' });
+
+    if (!user.passkeys || user.passkeys.length === 0) {
+      return exits.badRequest({ message: 'No passkeys registered for this user' });
+    }
+
+    const options = generateAuthenticationOptions({
+      timeout: 60000,
+      allowCredentials: user.passkeys.map(pk => ({
+        id: Buffer.from(pk.credID, 'base64'),
+        type: 'public-key',
+        transports: ['usb', 'ble', 'nfc', 'internal'],
+      })),
+      userVerification: 'preferred',
+    });
+
+    // Save challenge temporarily (session or cache)
+    this.req.session.challenge = options.challenge;
+
+    return exits.success(options);
+  }
+};
+
+ /** --------End Controller – passkey-login.js------------**/
+ 
+ /** -------- Start Controller – passkey-login-verify.js------------**/
+ /**Verifies the login response from the client and issues JWT if successful.**/
+
+const { verifyAuthenticationResponse } = require('@simplewebauthn/server');
+const jwt = require('jsonwebtoken');
+
+module.exports = {
+  friendlyName: 'Passkey login verify',
+
+  inputs: {
+    email: { type: 'string', required: true },
+    response: { type: 'json', required: true },
+  },
+
+  fn: async function (inputs, exits) {
+    const user = await Client.findOne({ emailAddress: inputs.email });
+    if (!user) return exits.badRequest({ message: 'User not found' });
+
+    const expectedChallenge = this.req.session.challenge;
+    if (!expectedChallenge) return exits.badRequest({ message: 'No login challenge found' });
+
+    const dbAuthenticator = user.passkeys.map(pk => ({
+      credentialID: Buffer.from(pk.credID, 'base64'),
+      credentialPublicKey: Buffer.from(pk.publicKey, 'base64'),
+      counter: pk.counter,
+    }));
+
+    const verification = await verifyAuthenticationResponse({
+      response: inputs.response,
+      expectedChallenge,
+      expectedOrigin: 'http://localhost:1337', // replace with frontend origin
+      expectedRPID: 'localhost',               // replace with domain
+      authenticators: dbAuthenticator,
+    });
+
+    if (!verification.verified) return exits.badRequest({ message: 'Authentication failed' });
+
+    // Update counter
+    const updatedPasskeys = user.passkeys.map(pk => {
+      if (pk.credID === inputs.response.id) pk.counter = verification.authenticationInfo.newCounter;
+      return pk;
+    });
+
+    await Client.updateOne({ id: user.id }).set({ passkeys: updatedPasskeys });
+
+    // Issue JWT
+    const token = jwt.sign(
+      { id: user.id, email: user.emailAddress, type: 'Client' },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '7d' }
+    );
+
+    return exits.success({
+      status: 'success',
+      message: 'Login successful',
+      token,
+      user: { id: user.id, email: user.emailAddress, fullName: user.fullName }
+    });
+  }
+};
+
+/** --------End Controller – passkey-login-verify.js------------**/
+
+/** --------Summary
+passkey-register + passkey-register-verify → create new passkey for user.
+passkey-login → generate challenge for login.
+passkey-login-verify → verify challenge + issue JWT.
+                     ------------**/
+
+/** --------Fronend------------**/
+
+Install frontend helper
+  -- npm install @simplewebauthn/browser
+  
+  Postman
+  
+	Step 1: Register Passkey (Create challenge)
+  
+		  Route: POST http://localhost:1337/api/v1/passkey-register
+		  Body Request:
+			{
+			   "email": "codingbrains62@gmail.com"
+			}
+		  Response:
+		   {
+			  "challenge": "random-string-generated-by-server",
+			  "rp": { "name": "ClasInfoPro26" },
+			  "user": {
+				"id": "1",
+				"name": "codingbrains62@gmail.com",
+				"displayName": "Suraj Shukla"
+			  },
+			  "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+			  "timeout": 60000
+			}
+			
+	Step 2: Complete Registration (Verify challenge)
+	      
+		    Route: POST http://localhost:1337/api/v1/passkey-register-verify
+			Body Request:
+				{
+				  "email": "codingbrains62@gmail.com",
+				  "response": {
+					"id": "generated-credential-id",
+					"rawId": "base64-encoded-id",
+					"type": "public-key",
+					"response": {
+					  "clientDataJSON": "...",
+					  "attestationObject": "..."
+					}
+				  }
+				}
+			Response:
+			    {
+				  "status": "success",
+				  "message": "Passkey registered successfully"
+				}
+
+    Step 3: Login Challenge
+	
+	        Route: POST POST http://localhost:1337/api/v1/passkey-login
+			Body Request: 
+			    {
+				  "email": "codingbrains62@gmail.com"
+				}
+			Response: 
+			    {
+				  "challenge": "random-string-generated-for-login",
+				  "allowCredentials": [
+					{
+					  "id": "base64-credential-id",
+					  "type": "public-key",
+					  "transports": ["usb","ble","nfc","internal"]
+					}
+				  ],
+				  "userVerification": "preferred",
+				  "timeout": 60000
+				}
+				
+	Step 4: Verify Login
+	
+	        Route: POST http://localhost:1337/api/v1/passkey-login-verify
+			Body Request: 
+			    {
+				  "email": "codingbrains62@gmail.com",
+				  "response": {
+					"id": "generated-credential-id",
+					"rawId": "base64-encoded-id",
+					"type": "public-key",
+					"response": {
+					  "clientDataJSON": "...",
+					  "authenticatorData": "...",
+					  "signature": "...",
+					  "userHandle": "..."
+					}
+				  }
+				}
+			Response:
+			    {
+				  "status": "success",
+				  "message": "Login successful",
+				  "token": "jwt-token-here",
+				  "user": {
+					"id": 1,
+					"email": "codingbrains62@gmail.com",
+					"fullName": "Suraj Shukla"
+				  }
+				}
+
+
+
+
+	
+	
+	
+
