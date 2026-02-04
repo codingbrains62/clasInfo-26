@@ -1,3 +1,3 @@
 <template>
-  <div>Dashboard works</div>
+  <div>Dashboard works in progress........</div>
 </template>
